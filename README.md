@@ -44,6 +44,49 @@ This project implements an information display using an ESP8266 and a MAX7219 LE
 
 ## Configuration
 
+### Setting up config.h
+
+The project uses a `config.h` file to store sensitive information and configuration settings. This file is not included in the repository for security reasons. Follow these steps to set it up:
+
+1. Create a new file named `config.h` in the `esp8266_max7219` directory
+2. Copy and paste the following template:
+
+```cpp
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// WiFi Configuration
+const char* WIFI_SSID = "YOUR_SSID";          // Your WiFi network name
+const char* WIFI_PASSWORD = "YOUR_PASSWORD";   // Your WiFi password
+
+// OpenWeatherMap Configuration
+const char* WEATHER_API_KEY = "YOUR_API_KEY";  // Your OpenWeatherMap API key
+const char* WEATHER_CITY = "YOUR_CITY";        // Your city name (e.g., "London")
+const char* WEATHER_COUNTRY_CODE = "YOUR_COUNTRY_CODE";  // Your country code (e.g., "UK")
+
+// Time Configuration
+const long GMT_OFFSET_SECONDS = -21600;        // Your timezone offset in seconds (-21600 = GMT-6)
+const int NTP_UPDATE_INTERVAL_MS = 60000;      // NTP update interval (60000 = 1 minute)
+
+#endif
+```
+
+3. Replace the placeholder values with your actual configuration:
+   - Replace `YOUR_SSID` with your WiFi network name
+   - Replace `YOUR_PASSWORD` with your WiFi password
+   - Get an API key from [OpenWeatherMap](https://openweathermap.org/api) and replace `YOUR_API_KEY`
+   - Set your city name and country code
+   - Adjust the timezone offset if needed:
+     * GMT-6 (America/Monterrey) = -21600
+     * GMT-5 = -18000
+     * GMT-4 = -14400
+     * GMT-3 = -10800
+     * GMT+0 = 0
+     * GMT+1 = 3600
+     * GMT+2 = 7200
+
+> ⚠️ Important: The `config.h` file contains sensitive information and should never be committed to version control.
+
 1. Install all required libraries in Arduino IDE
 2. Configure WiFi credentials:
    ```cpp

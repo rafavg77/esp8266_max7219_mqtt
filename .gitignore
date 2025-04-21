@@ -172,3 +172,21 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Configuration files with sensitive information
+esp8266_max7219/config.h
+
+# Arduino build files
+**/build/
+*.bin
+*.elf
+*.hex
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Operating System files
+.DS_Store
+*~
+.*.swp

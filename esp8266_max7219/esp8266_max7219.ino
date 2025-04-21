@@ -7,6 +7,7 @@
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
+#include "config.h"  // Include configuration file
 
 #define PRINT_CALLBACK  0
 #define DEBUG 1
@@ -33,11 +34,6 @@
 #define MODE_DURATION 10000  // Duration of each mode (10 seconds)
 #define WEATHER_UPDATE_INTERVAL 300000  // Update weather every 5 minutes (300000ms)
 
-// OpenWeatherMap API Configuration
-const char* openWeatherMapApiKey = "";  // Replace with your OpenWeatherMap API key
-const char* city = "";  // Replace with your city
-const char* countryCode = "";  // Replace with your country code
-
 // Operation modes
 enum OperationMode {
   MODE_DATETIME,
@@ -48,13 +44,9 @@ enum OperationMode {
 // SPI hardware interface
 MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 
-// WiFi login parameters - network name and password
-const char ssid[] = "";
-const char password[] = "";
-
-// NTP Objects
+// WiFi Objects
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", -21600, 60000);  // GMT-6 for America/Monterrey
+NTPClient timeClient(ntpUDP, "pool.ntp.org", GMT_OFFSET_SECONDS, NTP_UPDATE_INTERVAL_MS);
 
 // Global message buffer
 const uint8_t MESG_SIZE = 255;
@@ -182,11 +174,11 @@ void updateTemperature() {
     
     // Create the API URL
     String url = "http://api.openweathermap.org/data/2.5/weather?q=";
-    url += city;
+    url += WEATHER_CITY;
     url += ",";
-    url += countryCode;
+    url += WEATHER_COUNTRY_CODE;
     url += "&units=metric&appid=";
-    url += openWeatherMapApiKey;
+    url += WEATHER_API_KEY;
     
     http.begin(client, url);
     int httpCode = http.GET();
@@ -207,7 +199,7 @@ void updateTemperature() {
   }
   
   if (hasValidTemp) {
-    sprintf(curMessage, "%s: %.1fC", city, currentTemp);
+    sprintf(curMessage, "%s: %.1fC", WEATHER_CITY, currentTemp);
   } else {
     strcpy(curMessage, "Temp Error");
   }
@@ -294,7 +286,7 @@ void setup() {
   mx.clear();
 
   // Connect to WiFi
-  WiFi.begin(ssid, password);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   strcpy(curMessage, "Connecting WiFi...");
   
   int attempts = 0;
@@ -342,7 +334,7 @@ void loop() {
     if (WiFi.status() != WL_CONNECTED) {
       PRINTS("\nReconnecting WiFi...");
       WiFi.disconnect();
-      WiFi.begin(ssid, password);
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
       
       if (WiFi.status() == WL_CONNECTED) {
         timeClient.begin();
