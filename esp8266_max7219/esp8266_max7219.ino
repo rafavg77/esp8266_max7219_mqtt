@@ -7,97 +7,52 @@
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
-#include "config.h"  // Include configuration file
+#include <PubSubClient.h>
+#include "config.h"
 
-#define PRINT_CALLBACK  0
-#define DEBUG 1
-#define LED_HEARTBEAT 0
+// ============================================================================
+// 🧠 Variables globales
+// ============================================================================
+enum OperationMode { MODE_DATETIME, MODE_TEMPERATURE, MODE_COUNT };
 
-#if DEBUG
-#define PRINT(s, v) { Serial.print(F(s)); Serial.print(v); }
-#define PRINTS(s)   { Serial.print(F(s)); }
-#else
-#define PRINT(s, v)
-#define PRINTS(s)
-#endif
-
-// Define the number of devices we have in the chain and the hardware interface
-#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
-#define MAX_DEVICES 4
-#define COL_SIZE 8
-
-// GPIO pins for ESP8266
-#define CLK_PIN   14  // D5 - SCK
-#define DATA_PIN  13  // D7 - MOSI
-#define CS_PIN    15  // D8 - SS
-
-#define MODE_DURATION 10000  // Duration of each mode (10 seconds)
-#define WEATHER_UPDATE_INTERVAL 300000  // Update weather every 5 minutes (300000ms)
-
-// Operation modes
-enum OperationMode {
-  MODE_DATETIME,
-  MODE_TEMPERATURE,
-  MODE_COUNT
-};
-
-// SPI hardware interface
 MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
-
-// WiFi Objects
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", GMT_OFFSET_SECONDS, NTP_UPDATE_INTERVAL_MS);
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
 
-// Global message buffer
-const uint8_t MESG_SIZE = 255;
-const uint8_t CHAR_SPACING = 1;
-const uint8_t SCROLL_DELAY = 75;
-char curMessage[MESG_SIZE];
-
-// Variables for mode control and temperature
+// Estado global
 OperationMode currentMode = MODE_DATETIME;
 unsigned long lastModeChange = 0;
 unsigned long lastTimeUpdate = 0;
 unsigned long lastTempUpdate = 0;
 float currentTemp = 0.0;
 bool hasValidTemp = false;
-
-// Global variables for message control
 bool messageCompleted = true;
-char currentDisplayMessage[MESG_SIZE];
+bool showingMQTT = false;
 
-// Callback function for data being scrolled off the display
-void scrollDataSink(uint8_t dev, MD_MAX72XX::transformType_t t, uint8_t col) {
-  // No implementation needed for this example
-}
+char curMessage[MESSAGE_BUFFER_SIZE];
+String incomingMQTT = "";
 
-// Callback function for data required for scrolling into the display
+// ============================================================================
+// 💡 Funciones de display
+// ============================================================================
 uint8_t scrollDataSource(uint8_t dev, MD_MAX72XX::transformType_t t) {
   static enum { S_IDLE, S_NEXT_CHAR, S_SHOW_CHAR, S_SHOW_SPACE } state = S_IDLE;
   static char *p;
   static uint16_t curLen, showLen;
-  static uint8_t  cBuf[8];
-  static bool newMessageStarted = false;
+  static uint8_t cBuf[8];
   uint8_t colData = 0;
 
-  // finite state machine to control what we do on the callback
   switch (state) {
-    case S_IDLE: // reset the message pointer and check for new message to load
-      PRINTS("\nS_IDLE");
-      p = curMessage;      // reset the pointer to start of message
+    case S_IDLE:
+      p = curMessage;
       state = S_NEXT_CHAR;
-      newMessageStarted = true;
       messageCompleted = false;
-      strcpy(currentDisplayMessage, curMessage);
       break;
-
-    case S_NEXT_CHAR: // Load the next character from the font table
-      PRINT("\nS_NEXT_CHAR ", *p);
+    case S_NEXT_CHAR:
       if (*p == '\0') {
-        if (newMessageStarted) {
-          newMessageStarted = false;
-          messageCompleted = true;
-        }
+        messageCompleted = true;
         state = S_IDLE;
       } else {
         showLen = mx.getChar(*p++, sizeof(cBuf) / sizeof(cBuf[0]), cBuf);
@@ -105,246 +60,198 @@ uint8_t scrollDataSource(uint8_t dev, MD_MAX72XX::transformType_t t) {
         state = S_SHOW_CHAR;
       }
       break;
-
-    case S_SHOW_CHAR: // display the next part of the character
-      PRINTS("\nS_SHOW_CHAR");
+    case S_SHOW_CHAR:
       colData = cBuf[curLen++];
-      if (curLen < showLen)
-        break;
-
-      // set up the inter character spacing
-      showLen = (*p != '\0' ? CHAR_SPACING : (MAX_DEVICES*COL_SIZE)/2);
+      if (curLen < showLen) break;
+      showLen = (*p != '\0' ? CHAR_SPACING : (MAX_DEVICES * 8) / 2);
       curLen = 0;
       state = S_SHOW_SPACE;
-      // fall through
-
-    case S_SHOW_SPACE:  // display inter-character spacing (blank column)
-      PRINT("\nS_SHOW_SPACE: ", curLen);
-      PRINT("/", showLen);
-      curLen++;
-      if (curLen == showLen)
-        state = S_NEXT_CHAR;
       break;
-
-    default:
-      state = S_IDLE;
+    case S_SHOW_SPACE:
+      colData = 0;
+      if (++curLen == showLen) state = S_NEXT_CHAR;
+      break;
   }
-
-  return(colData);
+  return colData;
 }
 
-void scrollText(void) {
-  static uint32_t	prevTime = 0;
-
-  // Is it time to scroll the text?
-  if (millis() - prevTime >= SCROLL_DELAY)
-  {
-    mx.transform(MD_MAX72XX::TSL);  // scroll along - the callback will load all the data
-    prevTime = millis();            // starting point for next time
+void scrollText() {
+  static uint32_t prevTime = 0;
+  if (millis() - prevTime >= DISPLAY_SCROLL_SPEED) {
+    mx.transform(MD_MAX72XX::TSL);
+    prevTime = millis();
   }
 }
 
+// ============================================================================
+// 🕒 Tiempo y clima
+// ============================================================================
 void updateDateTime() {
   timeClient.update();
-  
-  if(WiFi.status() == WL_CONNECTED) {
-    time_t epochTime = timeClient.getEpochTime();
-    struct tm *ptm = localtime((time_t *)&epochTime);
-    
-    if (ptm != NULL) {
-      sprintf(curMessage, "%02d/%02d/%d %02d:%02d",
-              ptm->tm_mday, ptm->tm_mon + 1, ptm->tm_year + 1900,
-              ptm->tm_hour, ptm->tm_min);
-      PRINT("\nTime updated: ", curMessage);
-    } else {
-      strcpy(curMessage, "Error Time");
-    }
-  } else {
-    strcpy(curMessage, "No WiFi");
-  }
+  time_t epochTime = timeClient.getEpochTime();
+  struct tm *ptm = localtime(&epochTime);
+  if (ptm != NULL)
+    sprintf(curMessage, "%02d/%02d/%d %02d:%02d",
+            ptm->tm_mday, ptm->tm_mon + 1, ptm->tm_year + 1900,
+            ptm->tm_hour, ptm->tm_min);
+  else
+    strcpy(curMessage, "Error Time");
 }
 
 void updateTemperature() {
   unsigned long currentTime = millis();
-  
-  // Update temperature every 5 minutes
   if (!hasValidTemp || currentTime - lastTempUpdate >= WEATHER_UPDATE_INTERVAL) {
     WiFiClient client;
     HTTPClient http;
-    
-    // Create the API URL
+
     String url = "http://api.openweathermap.org/data/2.5/weather?q=";
     url += WEATHER_CITY;
     url += ",";
     url += WEATHER_COUNTRY_CODE;
     url += "&units=metric&appid=";
     url += WEATHER_API_KEY;
-    
+
     http.begin(client, url);
     int httpCode = http.GET();
-    
+
     if (httpCode == HTTP_CODE_OK) {
       String payload = http.getString();
       DynamicJsonDocument doc(1024);
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      if (!error) {
+      if (deserializeJson(doc, payload) == DeserializationError::Ok) {
         currentTemp = doc["main"]["temp"].as<float>();
         hasValidTemp = true;
         lastTempUpdate = currentTime;
       }
     }
-    
     http.end();
   }
-  
-  if (hasValidTemp) {
+
+  if (hasValidTemp)
     sprintf(curMessage, "%s: %.1fC", WEATHER_CITY, currentTemp);
-  } else {
+  else
     strcpy(curMessage, "Temp Error");
+}
+
+// ============================================================================
+// 📡 MQTT
+// ============================================================================
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  incomingMQTT = "";
+  for (unsigned int i = 0; i < length; i++)
+    incomingMQTT += (char)payload[i];
+
+  Serial.printf("\n📩 MQTT (%s): %s\n", topic, incomingMQTT.c_str());
+  showingMQTT = true;
+
+  strncpy(curMessage, incomingMQTT.c_str(), MESSAGE_BUFFER_SIZE - 1);
+  curMessage[MESSAGE_BUFFER_SIZE - 1] = '\0';
+}
+
+void mqttReconnect() {
+  while (!mqttClient.connected()) {
+    Serial.printf("Intentando conexión MQTT (%s)...", MQTT_CLIENT_ID);
+    if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS)) {
+      Serial.println("✅ Conectado al broker");
+      mqttClient.subscribe(MQTT_TOPIC);
+    } else {
+      Serial.print("❌ Error MQTT rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" Reintentando en 5s...");
+      delay(5000);
+    }
   }
 }
 
+// ============================================================================
+// 🔁 Cambio de modos
+// ============================================================================
 void handleModeChange() {
-  unsigned long currentTime = millis();
   static bool waitingForMessageComplete = false;
-  
-  // If we are waiting for the message to complete and it hasn't finished, do nothing
-  if (waitingForMessageComplete && !messageCompleted) {
+  unsigned long currentTime = millis();
+
+  if (showingMQTT) {
+    if (messageCompleted) {
+      showingMQTT = false;
+      lastModeChange = currentTime;
+      currentMode = MODE_DATETIME;
+      updateDateTime();
+    }
     return;
   }
-  
-  // If we were waiting and the message finished, change mode
+
+  if (waitingForMessageComplete && !messageCompleted) return;
   if (waitingForMessageComplete && messageCompleted) {
     waitingForMessageComplete = false;
     currentMode = static_cast<OperationMode>((currentMode + 1) % MODE_COUNT);
     lastModeChange = currentTime;
-    
-    // Update the message according to the new mode
     switch (currentMode) {
-      case MODE_DATETIME:
-        updateDateTime();
-        break;
-        
-      case MODE_TEMPERATURE:
-        updateTemperature();
-        break;
+      case MODE_DATETIME: updateDateTime(); break;
+      case MODE_TEMPERATURE: updateTemperature(); break;
     }
     return;
   }
-  
-  // Check if it's time to change mode
+
   if (currentTime - lastModeChange >= MODE_DURATION) {
-    // If the current message hasn't finished, mark that we are waiting
     if (!messageCompleted) {
       waitingForMessageComplete = true;
       return;
     }
-    
-    // If the message finished, change mode immediately
     currentMode = static_cast<OperationMode>((currentMode + 1) % MODE_COUNT);
     lastModeChange = currentTime;
-    
-    // Update the message according to the new mode
     switch (currentMode) {
-      case MODE_DATETIME:
-        updateDateTime();
-        break;
-        
-      case MODE_TEMPERATURE:
-        updateTemperature();
-        break;
+      case MODE_DATETIME: updateDateTime(); break;
+      case MODE_TEMPERATURE: updateTemperature(); break;
     }
   }
-  
-  // Periodic updates according to the current mode
+
   switch (currentMode) {
     case MODE_DATETIME:
-      if (currentTime - lastTimeUpdate >= 1000 && messageCompleted) {  // Update every second
+      if (currentTime - lastTimeUpdate >= 1000 && messageCompleted) {
         updateDateTime();
         lastTimeUpdate = currentTime;
       }
       break;
-      
     case MODE_TEMPERATURE:
-      if (messageCompleted) {
-        updateTemperature();  // The function already handles the update interval
-      }
+      if (messageCompleted) updateTemperature();
       break;
   }
 }
 
+// ============================================================================
+// 🚀 SETUP Y LOOP
+// ============================================================================
 void setup() {
   Serial.begin(115200);
-  PRINTS("\n[MD_MAX72XX Dual-Mode Display]\n");
+  Serial.println("\n[VertiDisplay — MQTT + Clock + Weather]");
 
-  // Display initialization
   mx.begin();
   mx.setShiftDataInCallback(scrollDataSource);
-  mx.setShiftDataOutCallback(scrollDataSink);
-  mx.control(MD_MAX72XX::INTENSITY, 5);
+  mx.control(MD_MAX72XX::INTENSITY, DISPLAY_INTENSITY);
   mx.clear();
 
-  // Connect to WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  strcpy(curMessage, "Connecting WiFi...");
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+  Serial.print("Conectando WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    PRINTS(".");
-    attempts++;
+    Serial.print(".");
   }
+  Serial.println(" ✅ WiFi conectado");
 
-  if (WiFi.status() == WL_CONNECTED) {
-    PRINTS("\nWiFi connected");
-    
-    // Configure NTP
-    timeClient.begin();
-    timeClient.setUpdateInterval(60000); // Update every minute
-    
-    // Force first update
-    int ntpAttempts = 0;
-    while (!timeClient.update() && ntpAttempts < 5) {
-      PRINTS("\nSynchronizing NTP...");
-      timeClient.forceUpdate();
-      delay(500);
-      ntpAttempts++;
-    }
-    
-    if (timeClient.isTimeSet()) {
-      updateDateTime();
-    } else {
-      strcpy(curMessage, "NTP Sync Failed");
-    }
-  } else {
-    strcpy(curMessage, "WiFi Failed");
-  }
+  timeClient.begin();
+  timeClient.update();
+  updateDateTime();
 
-  // Get initial temperature
-  if (WiFi.status() == WL_CONNECTED) {
-    updateTemperature();
-  }
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  mqttReconnect();
+
+  updateTemperature();
 }
 
 void loop() {
-  // Check WiFi connection and reconnect if necessary
-  static unsigned long lastWifiCheck = 0;
-  if (millis() - lastWifiCheck > 30000) { // Check every 30 seconds
-    if (WiFi.status() != WL_CONNECTED) {
-      PRINTS("\nReconnecting WiFi...");
-      WiFi.disconnect();
-      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-      
-      if (WiFi.status() == WL_CONNECTED) {
-        timeClient.begin();
-        timeClient.forceUpdate();
-      }
-    }
-    lastWifiCheck = millis();
-  }
+  if (!mqttClient.connected()) mqttReconnect();
+  mqttClient.loop();
 
-  handleModeChange();  // Handle mode changes
-  scrollText();        // Update LED matrix
+  handleModeChange();
+  scrollText();
 }
-
