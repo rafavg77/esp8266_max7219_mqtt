@@ -55,20 +55,57 @@ The project uses a `config.h` file to store sensitive information and configurat
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// WiFi Configuration
-const char* WIFI_SSID = "YOUR_SSID";          // Your WiFi network name
-const char* WIFI_PASSWORD = "YOUR_PASSWORD";   // Your WiFi password
+// ============================================================================
+// 🛜 WiFi Configuration
+// ============================================================================
+const char* WIFI_SSID = "YOUR_SSID";          
+const char* WIFI_PASSWORD = "YOUR_PASSWORD";   
 
-// OpenWeatherMap Configuration
-const char* WEATHER_API_KEY = "YOUR_API_KEY";  // Your OpenWeatherMap API key
-const char* WEATHER_CITY = "YOUR_CITY";        // Your city name (e.g., "London")
-const char* WEATHER_COUNTRY_CODE = "YOUR_COUNTRY_CODE";  // Your country code (e.g., "UK")
+// ============================================================================
+// 🌦️ OpenWeatherMap Configuration
+// ============================================================================
+const char* WEATHER_API_KEY = "YOUR_API_KEY";  
+const char* WEATHER_CITY = "YOUR_CITY";        
+const char* WEATHER_COUNTRY_CODE = "YOUR_COUNTRY_CODE";  
 
-// Time Configuration
-const long GMT_OFFSET_SECONDS = -21600;        // Your timezone offset in seconds (-21600 = GMT-6)
-const int NTP_UPDATE_INTERVAL_MS = 60000;      // NTP update interval (60000 = 1 minute)
+// ============================================================================
+// ⏰ Time Configuration
+// ============================================================================
+const long GMT_OFFSET_SECONDS = -21600;        // Ejemplo: -21600 = GMT-6
+const int NTP_UPDATE_INTERVAL_MS = 60000;      // Intervalo de actualización NTP (ms)
+
+// ============================================================================
+// 📡 MQTT Configuration
+// ============================================================================
+const char* MQTT_SERVER   = "192.168.1.100";   // Dirección del broker
+const int   MQTT_PORT     = 1883;              // Puerto MQTT (default: 1883)
+const char* MQTT_USER     = "mqtt_user";       // Usuario del broker
+const char* MQTT_PASS     = "mqtt_password";   // Contraseña del broker
+const char* MQTT_TOPIC    = "esp8266/display"; // Tópico suscrito
+const char* MQTT_CLIENT_ID = "VertiDisplay01"; // Identificador del cliente MQTT
+
+// ============================================================================
+// 💡 Display Configuration
+// ============================================================================
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW      // Tipo de módulo MAX7219
+#define MAX_DEVICES 4                          // Número de módulos en cadena
+#define CLK_PIN   14                           // D5
+#define DATA_PIN  13                           // D7
+#define CS_PIN    15                           // D8
+
+#define DISPLAY_INTENSITY 5                    // Brillo del display (0-15)
+#define DISPLAY_SCROLL_SPEED 75                // Velocidad de scroll (ms entre pasos)
+#define CHAR_SPACING 1                         // Espacio entre caracteres
+#define MESSAGE_BUFFER_SIZE 255                // Tamaño máximo del mensaje
+
+// ============================================================================
+// ⚙️ Operación general
+// ============================================================================
+#define MODE_DURATION 10000                    // Duración de cada modo (ms)
+#define WEATHER_UPDATE_INTERVAL 300000         // Actualizar clima cada 5 minutos
 
 #endif
+
 ```
 
 3. Replace the placeholder values with your actual configuration:
